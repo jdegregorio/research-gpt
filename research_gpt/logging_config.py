@@ -12,9 +12,10 @@ logger.add(
     format=log_format,
 )
 logger.add(
-    "application.log",
+    "./logs/application.log",
     level="INFO",
     format=log_format,
     rotation="10 MB",  # Rotate the log file when it reaches 10 MB
     retention="10 days",  # Keep rotated log files for 10 days
 )
+

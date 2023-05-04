@@ -3,15 +3,8 @@ import time
 from typing import List, Optional, Dict, Any
 import requests
 import pandas as pd
-from datetime import date, timedelta
-from logging_config import logger
-
-CONFIG = {
-    'api_key': os.environ.get('GOOGLE_API_KEY'),
-    'cx': os.environ.get('GOOGLE_CX'),
-    'max_retries': 3,
-    'retry_delay': 60  # seconds
-}
+from research_gpt.logging_config import logger
+from research_gpt.config import CONFIG_SEARCH
 
 
 def search_google(query: str, last_n_days: Optional[int] = None, **kwargs: Dict[str, Any]) -> List[Dict[str, Any]]:
@@ -26,22 +19,22 @@ def search_google(query: str, last_n_days: Optional[int] = None, **kwargs: Dict[
     Returns:
         List[Dict[str, Any]]: A list of dictionaries containing the search results.
     """
-    if CONFIG['api_key'] is None:
+    if CONFIG_SEARCH['api_key'] is None:
         raise ValueError("The Google API key is missing. Please set the 'GOOGLE_API_KEY' environment variable.")
     
-    if CONFIG['cx'] is None:
+    if CONFIG_SEARCH['cx'] is None:
         raise ValueError("The Google CX value is missing. Please set the 'GOOGLE_CX' environment variable.")
 
     retries = 0
-    retry_delay = CONFIG['retry_delay']
+    retry_delay = CONFIG_SEARCH['retry_delay']
     results = []
 
-    while retries < CONFIG['max_retries']:
+    while retries < CONFIG_SEARCH['max_retries']:
         try:
             url = "https://www.googleapis.com/customsearch/v1"
             params = {
-                "key": CONFIG['api_key'],
-                "cx": CONFIG['cx'],
+                "key": CONFIG_SEARCH['api_key'],
+                "cx": CONFIG_SEARCH['cx'],
                 "q": query,
             }
 
