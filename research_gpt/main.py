@@ -15,4 +15,4 @@ urls = [result['link'] for result in search_results]
 
 scraped_data, failed_urls = scrape_urls(urls)
 
-scraped_data[0][1]
+scraped_data[0]

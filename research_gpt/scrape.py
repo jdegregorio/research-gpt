@@ -6,6 +6,8 @@ from bs4 import BeautifulSoup
 from typing import List, Tuple, Dict
 import requests
 from tqdm import tqdm
+import hashlib
+import html2text
 
 try:
     from research_gpt.logging_config import logger
@@ -22,6 +24,16 @@ def clean_text(text: str) -> str:
     """Clean up the extracted text by removing extra spaces, newlines, and other common "junk" characters."""
     cleaned_text = re.sub(r'\s+', ' ', text).strip()
     return cleaned_text
+
+def generate_url_hash(url: str) -> str:
+    """
+    Generate a file name based on the SHA-256 hash of the URL.
+    
+    :param url: The URL for which to generate a file name
+    :return: The generated file name as a string
+    """
+    sha256_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return sha256_hash
 
 def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> str:
     """
@@ -52,16 +64,32 @@ def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, req
     return None
 
 
-def process_html(html: str, remove_elements: List[str] = None) -> Tuple[str, List[str]]:
+def extract_links(html: str) -> List[str]:
     """
-    Process the HTML content and return the extracted text and list of href links.
+    Extract href links from the HTML content.
+
+    :param html: HTML content to process
+    :return: A list of href links, or an empty list if the HTML content is None
+    """
+    if html is None:
+        return []
+
+    soup = BeautifulSoup(html, 'html.parser')
+    href_links = [a['href'] for a in soup.find_all('a', href=True)]
+
+    return href_links
+
+
+def process_html(html: str, remove_elements: List[str] = None) -> str:
+    """
+    Process the HTML content and return the extracted text in markdown format.
 
     :param html: HTML content to process
     :param remove_elements: List of HTML tags to remove (default: ['header', 'footer', 'script', 'style', 'nav'])
-    :return: Extracted text and a list of href links, or (None, []) if the HTML content is None
+    :return: Extracted text in markdown format, or None if the HTML content is None
     """
     if html is None:
-        return None, []
+        return None
 
     if remove_elements is None:
         remove_elements = ['header', 'footer', 'script', 'style', 'nav']
@@ -71,10 +99,33 @@ def process_html(html: str, remove_elements: List[str] = None) -> Tuple[str, Lis
     for elem in soup(remove_elements):
         elem.decompose()
 
-    text = clean_text(soup.get_text(separator=' '))
-    href_links = [a['href'] for a in soup.find_all('a', href=True)]
+    # Convert HTML to markdown
+    markdown_converter = html2text.HTML2Text()
+    markdown_converter.ignore_links = True
+    markdown_converter.ignore_images = True
+    markdown_converter.ignore_tables = True
+    markdown_text = markdown_converter.handle(soup.prettify())
 
-    return text, href_links
+    return markdown_text
+
+
+def write_markdown_to_file(url: str, markdown_text: str, output_dir: str):
+    """
+    Write the markdown text to a file in the specified output directory.
+
+    :param url: The URL used to generate the file name
+    :param markdown_text: The markdown text to write
+    :param output_dir: The directory where the output file should be written
+    """
+    if not markdown_text or not url or not output_dir:
+        return
+
+    # Generate a unique file name based on the URL
+    file_name = f"{generate_url_hash(url)}.md"
+
+    # Write markdown text to file
+    with open(f"{output_dir}/{file_name}", "w") as f:
+        f.write(markdown_text)
 
 
 def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15, remove_elements: List[str] = None) -> Tuple[str, List[str]]:
@@ -101,7 +152,7 @@ def save_html_to_disk(url: str, raw_html: str, output_dir: str) -> None:
     :param raw_html: The raw HTML content
     :param output_dir: The directory to save the raw HTML file
     """
-    file_name = f"{hash(url)}.html"
+    file_name = f"{generate_url_hash(url)}.html"
     file_path = os.path.join(output_dir, file_name)
 
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -112,7 +163,7 @@ def save_html_to_disk(url: str, raw_html: str, output_dir: str) -> None:
         "file_name": file_name
     }
 
-    metadata_path = os.path.join(output_dir, f"{hash(url)}.json")
+    metadata_path = os.path.join(output_dir, f"{generate_url_hash(url)}.json")
 
     with open(metadata_path, 'w', encoding='utf-8') as f:
         json.dump(metadata, f)
@@ -145,22 +196,20 @@ def load_html_from_disk(input_dir: str) -> List[Dict[str, str]]:
                     "raw_html": raw_html
                 })
 
-    return html
+    return html_data                    
 
 
-def scrape_urls(urls: List[str], max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15, remove_elements: List[str] = None) -> Tuple[List[Dict[str, str]], List[str]]:
+def fetch_and_save_html_from_urls(urls: List[str], output_dir: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> List[str]:
     """
-    Scrape a list of URLs and extract text and href links using BeautifulSoup.
+    Scrape a list of URLs and save the raw HTML content to disk.
 
     :param urls: List of URLs to scrape
+    :param output_dir: The directory to save the raw HTML files and their metadata
     :param max_retries: Maximum number of retries for scraping a URL (default: 3)
     :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3)
     :param request_timeout: Timeout for the GET request in seconds (default: 15)
-    :param remove_elements: List of HTML tags to remove (default: ['header', 'footer', 'script', 'style', 'nav'])
-    :return: A tuple containing two lists: the first list contains dictionaries with the original URL,
-             extracted text, and href links, and the second list contains the URLs that failed to be scraped
+    :return: A list of URLs that failed to be scraped
     """
-    scraped_data = []
     failed_urls = []
 
     url_metadata = {url: {"retries": 0, "last_attempt_timestamp": None} for url in urls}
@@ -180,18 +229,13 @@ def scrape_urls(urls: List[str], max_retries: int = 3, initial_retry_delay: int 
                 retry_delay = calculate_retry_delay(metadata["retries"])
 
                 if metadata["last_attempt_timestamp"] is None or (current_time - metadata["last_attempt_timestamp"]) >= retry_delay:
-                    scraped_text, href_links = scrape(url, max_retries=0, initial_retry_delay=0, request_timeout=request_timeout, remove_elements=remove_elements)
+                    raw_html = fetch_html(url, max_retries=0, initial_retry_delay=0, request_timeout=request_timeout)
 
-                    if scraped_text is not None:
-                        scraped_entry = {
-                            "url": url,
-                            "text": scraped_text,
-                            "links": href_links
-                        }
-                        scraped_data.append(scraped_entry)
+                    if raw_html is not None:
+                        save_html_to_disk(url, raw_html, output_dir)
                         remaining_urls.remove(url)
                         progress_bar.update(1)
-                        logger.debug(f"Successfully scraped {url}")
+                        logger.debug(f"Successfully scraped and saved raw HTML for {url}")
                     else:
                         metadata["retries"] += 1
                         metadata["last_attempt_timestamp"] = current_time
@@ -199,4 +243,31 @@ def scrape_urls(urls: List[str], max_retries: int = 3, initial_retry_delay: int 
                         if metadata["retries"] >= max_retries:
                             failed_urls.append(url)
                             remaining_urls.remove(url)
-                            progress_bar.update(1)                          
+                            progress_bar.update(1)
+                            logger.debug(f"Failed to scrape {url} after 3 attempts")
+
+            # Add a short sleep time to prevent excessive looping over the last few URLs
+            time.sleep(0.1)
+
+    if failed_urls:
+        logger.warning(f"Failed to scrape {len(failed_urls)} URL(s):\n" + "\n".join(failed_urls))
+    else:
+        logger.info("Successfully scraped all URLs.")
+
+    return failed_urls
+
+
+if __name__ == "__main__":
+    # Example usage:
+    urls_to_scrape = ["https://www.si.com/fantasy/2023/05/03/updated-fantasy-football-rankings-after-nfl-draft", "https://www.pff.com/news/fantasy-football-post-2023-nfl-draft-dynasty-rookie-superflex-rankings", "https://www.example.com/page1", "https://www.example.com/page2"]
+    output_directory = "./output/html"
+
+    if not os.path.exists(output_directory):
+        os.makedirs(output_directory)
+
+    failed = fetch_and_save_html_from_urls(urls_to_scrape, output_directory)
+    if failed:
+        logger.warning(f"Failed to scrape the following URLs: {failed}")
+
+    loaded_data = load_html_from_disk(output_directory)
+    print(loaded_data)
