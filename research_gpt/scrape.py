@@ -10,24 +10,27 @@ try:
 except ImportError:
     from logging_config import logger
 
+
 def calculate_retry_delay(retries: int, initial_retry_delay: int = 5) -> int:
     """Calculate the retry delay using exponential backoff."""
     return initial_retry_delay * (2 ** (retries - 1))
+
 
 def clean_text(text: str) -> str:
     """Clean up the extracted text by removing extra spaces, newlines, and other common "junk" characters."""
     cleaned_text = re.sub(r'\s+', ' ', text).strip()
     return cleaned_text
 
-def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> Tuple[str, List[str]]:
-    """
-    Scrape the content of a given URL and return the extracted text and list of href links.
 
-    :param url: URL to scrape
-    :param max_retries: Maximum number of retries for scraping a URL (default: 3)
+def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> str:
+    """
+    Fetch the raw HTML content of a given URL.
+
+    :param url: URL to fetch
+    :param max_retries: Maximum number of retries for fetching a URL (default: 3)
     :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3)
     :param request_timeout: Timeout for the GET request in seconds (default: 15)
-    :return: Extracted text and a list of href links, or (None, []) if the URL could not be scraped
+    :return: Raw HTML content or None if the URL could not be fetched
     """
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36"
@@ -37,19 +40,7 @@ def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request
     while retries <= max_retries:
         try:
             response = requests.get(url, headers=headers, timeout=request_timeout)
-            soup = BeautifulSoup(response.text, 'html.parser')
-
-            # Remove unnecessary elements (header, footer, scripts, styles, etc.)
-            for elem in soup(['header', 'footer', 'script', 'style', 'nav']):
-                elem.decompose()
-
-            # Extract text from the remaining elements
-            text = clean_text(soup.get_text(separator=' '))
-
-            # Extract href links
-            href_links = [a['href'] for a in soup.find_all('a', href=True)]
-
-            return text, href_links
+            return response.text
         except Exception as e:
             retries += 1
             if retries <= max_retries:
@@ -57,21 +48,65 @@ def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request
                 retry_delay = calculate_retry_delay(retries, initial_retry_delay)
                 time.sleep(retry_delay)
 
-    # Return None if the URL was not scraped successfully
-    return None, []
+    return None
 
-def scrape_urls(urls: List[str]) -> Tuple[List[Dict[str, str]], List[str]]:
+
+def process_html(html: str, remove_elements: List[str] = None) -> Tuple[str, List[str]]:
+    """
+    Process the HTML content and return the extracted text and list of href links.
+
+    :param html: HTML content to process
+    :param remove_elements: List of HTML tags to remove (default: ['header', 'footer', 'script', 'style', 'nav'])
+    :return: Extracted text and a list of href links, or (None, []) if the HTML content is None
+    """
+    if html is None:
+        return None, []
+
+    if remove_elements is None:
+        remove_elements = ['header', 'footer', 'script', 'style', 'nav']
+
+    soup = BeautifulSoup(html, 'html.parser')
+
+    for elem in soup(remove_elements):
+        elem.decompose()
+
+    text = clean_text(soup.get_text(separator=' '))
+    href_links = [a['href'] for a in soup.find_all('a', href=True)]
+
+    return text, href_links
+
+
+def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15, remove_elements: List[str] = None) -> Tuple[str, List[str]]:
+    """
+    Scrape the content of a given URL and return the extracted text and list of href links.
+
+    :param url: URL to scrape
+    :param max_retries: Maximum number of retries for scraping a URL (default: 3)
+    :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3)
+    :param request_timeout: Timeout for the GET request in seconds (default: 15)
+    :param remove_elements: List of HTML tags to remove (default: ['header', 'footer', 'script', 'style', 'nav'])
+    :return: Extracted text and a list of href links, or (None, []) if the URL could not be scraped
+    """
+    raw_html = fetch_html(url, max_retries=max_retries, initial_retry_delay=initial_retry_delay, request_timeout=request_timeout)
+    text, href_links = process_html(raw_html, remove_elements=remove_elements)
+    return text, href_links
+
+
+def scrape_urls(urls: List[str], max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15, remove_elements: List[str] = None) -> Tuple[List[Dict[str, str]], List[str]]:
     """
     Scrape a list of URLs and extract text and href links using BeautifulSoup.
 
     :param urls: List of URLs to scrape
+    :param max_retries: Maximum number of retries for scraping a URL (default: 3)
+    :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3)
+    :param request_timeout: Timeout for the GET request in seconds (default: 15)
+    :param remove_elements: List of HTML tags to remove (default: ['header', 'footer', 'script', 'style', 'nav'])
     :return: A tuple containing two lists: the first list contains dictionaries with the original URL,
              extracted text, and href links, and the second list contains the URLs that failed to be scraped
     """
     scraped_data = []
     failed_urls = []
 
-    # Initialize the retry and delay metadata
     url_metadata = {url: {"retries": 0, "last_attempt_timestamp": None} for url in urls}
 
     remaining_urls = set(urls)
@@ -86,12 +121,10 @@ def scrape_urls(urls: List[str]) -> Tuple[List[Dict[str, str]], List[str]]:
                 metadata = url_metadata[url]
                 current_time = time.time()
 
-                # Calculate the retry delay using exponential backoff
                 retry_delay = calculate_retry_delay(metadata["retries"])
 
-                # Check if the time since the last attempt has exceeded the target delay
                 if metadata["last_attempt_timestamp"] is None or (current_time - metadata["last_attempt_timestamp"]) >= retry_delay:
-                    scraped_text, href_links = scrape(url, max_retries=0, initial_retry_delay=0)
+                    scraped_text, href_links = scrape(url, max_retries=0, initial_retry_delay=0, request_timeout=request_timeout, remove_elements=remove_elements)
 
                     if scraped_text is not None:
                         scraped_entry = {
@@ -107,18 +140,7 @@ def scrape_urls(urls: List[str]) -> Tuple[List[Dict[str, str]], List[str]]:
                         metadata["retries"] += 1
                         metadata["last_attempt_timestamp"] = current_time
 
-                        if metadata["retries"] >= 3:
+                        if metadata["retries"] >= max_retries:
                             failed_urls.append(url)
                             remaining_urls.remove(url)
-                            progress_bar.update(1)
-                            logger.debug(f"Failed to scrape {url} after 3 attempts")
-
-            # Add a short sleep time to prevent excessive looping over the last few URLs
-            time.sleep(0.1)
-
-    if failed_urls:
-        logger.warning(f"Failed to scrape {len(failed_urls)} URL(s):\n" + "\n".join(failed_urls))
-    else:
-        logger.info("Successfully scraped all URLs.")
-
-    return scraped_data, failed_urls
+                            progress_bar.update(1)                          
