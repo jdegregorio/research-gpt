@@ -6,3 +6,9 @@ CONFIG_SEARCH = {
     'max_retries': 3,
     'retry_delay': 60  # seconds
 }
+
+CONFIG_SCRAPE = {
+    'max_retries': 3,
+    'retry_delay': 60,  # seconds
+    'request_timeout': 15  # seconds
+}
