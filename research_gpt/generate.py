@@ -91,14 +91,16 @@ def generate_search_queries(objective: str) -> List[QueryVariation]:
 
 # Test
 if __name__ == "__main__":
-    objective = (
-        "Create a full fantasy rookie draft plan for the NFL for the 2023 Superflex Dynasty Fantasy Football League. "
-        "Learn about all of the rookie players and the teams they were drafted to. "
-        "Learn about the ceiling and floor of each player, potential risks or concerns, "
-        "team-level impacts that may impact performance, and anything else that would impact draft selection decisions. "
-        "The primary goal will be to develop rankings and tiers for each player to support the draft plan. "
-        "Again, this is for a Superflex Dynasty league, which is often has much different player assessments than other styles of fantasy leagues."
-    )
+    objective = """
+    Create a full fantasy rookie draft plan for the NFL for the 2023 Superflex
+    Dynasty Fantasy Football League. Learn about all of the rookie players and
+    the which team drafted them. For each player learn about the estimated
+    ceiling, floor, and potential risks or concerns including injury potential.
+    Evaluate team-level impacts that may impact performance, growth potential,
+    or anything else that would impact draft selection decisions. The primary
+    goal will be to develop rankings and tiers for dynasty superflex for each
+    player to support the draft plan.
+    """
     try:
         search_queries = generate_search_queries(objective)
         print(search_queries)
