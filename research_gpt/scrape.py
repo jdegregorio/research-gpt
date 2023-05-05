@@ -1,4 +1,6 @@
+import os
 import re
+import json
 import time
 from bs4 import BeautifulSoup
 from typing import List, Tuple, Dict
@@ -20,7 +22,6 @@ def clean_text(text: str) -> str:
     """Clean up the extracted text by removing extra spaces, newlines, and other common "junk" characters."""
     cleaned_text = re.sub(r'\s+', ' ', text).strip()
     return cleaned_text
-
 
 def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> str:
     """
@@ -90,6 +91,61 @@ def scrape(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request
     raw_html = fetch_html(url, max_retries=max_retries, initial_retry_delay=initial_retry_delay, request_timeout=request_timeout)
     text, href_links = process_html(raw_html, remove_elements=remove_elements)
     return text, href_links
+
+
+def save_html_to_disk(url: str, raw_html: str, output_dir: str) -> None:
+    """
+    Save raw HTML content to disk.
+
+    :param url: The URL from which the raw HTML was fetched
+    :param raw_html: The raw HTML content
+    :param output_dir: The directory to save the raw HTML file
+    """
+    file_name = f"{hash(url)}.html"
+    file_path = os.path.join(output_dir, file_name)
+
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(raw_html)
+
+    metadata = {
+        "url": url,
+        "file_name": file_name
+    }
+
+    metadata_path = os.path.join(output_dir, f"{hash(url)}.json")
+
+    with open(metadata_path, 'w', encoding='utf-8') as f:
+        json.dump(metadata, f)
+
+
+def load_html_from_disk(input_dir: str) -> List[Dict[str, str]]:
+    """
+    Load raw HTML files from disk and construct a list of dictionaries with their corresponding URLs.
+
+    :param input_dir: The directory containing the raw HTML files and their metadata
+    :return: A list of dictionaries with the original URL and the raw HTML content
+    """
+    html_data = []
+
+    for root, _, files in os.walk(input_dir):
+        for file in files:
+            if file.endswith('.html'):
+                metadata_path = os.path.join(root, file.replace('.html', '.json'))
+
+                with open(metadata_path, 'r', encoding='utf-8') as f:
+                    metadata = json.load(f)
+
+                html_file_path = os.path.join(root, file)
+
+                with open(html_file_path, 'r', encoding='utf-8') as f:
+                    raw_html = f.read()
+
+                html_data.append({
+                    "url": metadata["url"],
+                    "raw_html": raw_html
+                })
+
+    return html
 
 
 def scrape_urls(urls: List[str], max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15, remove_elements: List[str] = None) -> Tuple[List[Dict[str, str]], List[str]]:
