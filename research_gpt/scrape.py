@@ -3,11 +3,13 @@ import re
 import json
 import time
 from bs4 import BeautifulSoup
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Optional, Callable
 import requests
 from tqdm import tqdm
 import hashlib
 import html2text
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 try:
     from research_gpt.logging_config import logger
@@ -16,7 +18,13 @@ except ImportError:
 
 
 def calculate_retry_delay(retries: int, initial_retry_delay: int = 5) -> int:
-    """Calculate the retry delay using exponential backoff."""
+    """
+    Calculate the retry delay based on the number of retries and the initial retry delay.
+
+    :param retries: The number of retries that have been attempted.
+    :param initial_retry_delay: The initial delay between retries in seconds.
+    :return: The calculated retry delay in seconds.
+    """
     return initial_retry_delay * (2 ** (retries - 1))
 
 
@@ -24,6 +32,7 @@ def clean_text(text: str) -> str:
     """Clean up the extracted text by removing extra spaces, newlines, and other common "junk" characters."""
     cleaned_text = re.sub(r'\s+', ' ', text).strip()
     return cleaned_text
+
 
 def generate_url_hash(url: str) -> str:
     """
@@ -35,7 +44,37 @@ def generate_url_hash(url: str) -> str:
     sha256_hash = hashlib.sha256(url.encode("utf-8")).hexdigest()
     return sha256_hash
 
-def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> str:
+
+def check_html_incomplete_load(html: str) -> bool:
+    keywords = ['Please enable JS', 'captcha', 'data-cfasync', 'g-recaptcha']
+    return any(keyword in html for keyword in keywords)
+
+
+def fetch_with_retry(fetch_func: Callable, url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> Optional[str]:
+    """
+    Fetch the raw HTML content of a given URL using the specified fetch function, with retry logic.
+
+    :param fetch_func: The fetch function to use (e.g., fetch_html_requests or fetch_html_selenium).
+    :param url: URL to fetch.
+    :param max_retries: Maximum number of retries for fetching a URL (default: 3).
+    :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3).
+    :param request_timeout: Timeout for the request in seconds (default: 15).
+    :return: Raw HTML content or None if the URL could not be fetched.
+    """
+    retries = 0
+    while retries <= max_retries:
+        try:
+            return fetch_func(url, request_timeout)
+        except Exception as e:
+            retries += 1
+            if retries <= max_retries:
+                logger.warning(f"Failed to fetch content for {url} (attempt {retries}): {e}")
+                retry_delay = calculate_retry_delay(retries, initial_retry_delay)
+                time.sleep(retry_delay)
+    return None
+
+
+def fetch_html_requests(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> str:
     """
     Fetch the raw HTML content of a given URL.
 
@@ -62,6 +101,65 @@ def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, req
                 time.sleep(retry_delay)
 
     return None
+
+def fetch_html_selenium(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> Optional[str]:
+    """
+    Fetch the raw HTML content of a given URL.
+
+    :param url: URL to fetch
+    :param max_retries: Maximum number of retries for fetching a URL (default: 3)
+    :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3)
+    :param request_timeout: Timeout for the GET request in seconds (default: 15)
+    :return: Raw HTML content or None if the URL could not be fetched
+    """
+    retries = 0
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")
+    chrome_options.add_argument("user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.82 Safari/537.36")
+    # chrome_options.set_page_load_timeout(request_timeout)
+
+    while retries <= max_retries:
+        try:
+            with webdriver.Chrome(options=chrome_options) as driver:
+                driver.get(url)
+                return driver.page_source
+        except Exception as e:
+            retries += 1
+            if retries <= max_retries:
+                logger.warning(f"Failed to fetch content for {url} (attempt {retries}): {e}")
+                retry_delay = calculate_retry_delay(retries, initial_retry_delay)
+                time.sleep(retry_delay)
+
+    return None
+
+
+def fetch_html(url: str, max_retries: int = 3, initial_retry_delay: int = 3, request_timeout: int = 15) -> Optional[str]:
+    """
+    Fetch the raw HTML content of a given URL, first attempting to use the requests package, and then falling back to using selenium.
+
+    :param url: URL to fetch.
+    :param max_retries: Maximum number of retries for fetching a URL (default: 3).
+    :param initial_retry_delay: Initial delay between retries in seconds, doubles with each retry (default: 3).
+    :param request_timeout: Timeout for the request in seconds (default: 15).
+    :return: Raw HTML content or None if the URL could not be fetched.
+    """
+    logger.info(f"Fetching HTML content for {url}")
+    
+    # Attempt to fetch HTML content using the requests package
+    logger.debug("Attempting to fetch HTML content using requests")
+    html_content = fetch_with_retry(fetch_html_requests, url, max_retries, initial_retry_delay, request_timeout)
+    
+    # If the fetched content is incomplete or not fetched, fall back to using selenium
+    if html_content is None or check_html_incomplete_load(html_content):
+        logger.warning("Failed to fetch complete HTML content using requests, falling back to selenium")
+        html_content = fetch_with_retry(fetch_html_selenium, url, max_retries, initial_retry_delay, request_timeout)
+    
+    if html_content is None:
+        logger.warning(f"Failed to fetch HTML content for {url} using both requests and selenium")
+    else:
+        logger.info(f"Successfully fetched HTML content for {url}")
+    
+    return html_content
 
 
 def extract_links(html: str) -> List[str]:
